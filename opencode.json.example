@@ -1,0 +1,151 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md",
+    "AGENTS.base.md"
+  ],
+  "mcp": {
+    "servers": {
+      "pipeline": {
+        "type": "remote",
+        "url": "{env:PIPELINE_BRIDGE_URL}/mcp",
+        "headers": {
+          "Authorization": "Bearer {env:PIPELINE_BRIDGE_TOKEN}"
+        },
+        "timeout": {
+          "catalog": 60000,
+          "execution": 60000
+        },
+        "disabled": false
+      }
+    }
+  },
+  "agents": {
+    "orchestrator": {
+      "mode": "primary",
+      "system": "{file:.opencode/agents/orchestrator.md}",
+      "permissions": [
+        {
+          "action": "pipeline_*",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ]
+    },
+    "explore": {
+      "mode": "subagent",
+      "system": "{file:.opencode/agents/explore.md}",
+      "permissions": [
+        {
+          "action": "pipeline_*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "pipeline_bus_createTask",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    },
+    "task-allocator": {
+      "mode": "subagent",
+      "system": "{file:.opencode/agents/task-allocator.md}",
+      "permissions": [
+        {
+          "action": "pipeline_*",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ]
+    },
+    "backend-dev": {
+      "mode": "subagent",
+      "system": "{file:.opencode/agents/backend-dev.md}",
+      "permissions": [
+        {
+          "action": "pipeline_*",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ]
+    },
+    "frontend-dev": {
+      "mode": "subagent",
+      "system": "{file:.opencode/agents/frontend-dev.md}",
+      "permissions": [
+        {
+          "action": "pipeline_*",
+          "resource": "*",
+          "effect": "allow"
+        }
+      ]
+    },
+    "verifier": {
+      "mode": "subagent",
+      "system": "{file:.opencode/agents/verifier.md}",
+      "permissions": [
+        {
+          "action": "pipeline_*",
+          "resource": "*",
+          "effect": "allow"
+        },
+        {
+          "action": "pipeline_bus_createTask",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "pipeline_bus_updateTask",
+          "resource": "*",
+          "effect": "deny"
+        },
+        {
+          "action": "pipeline_index_codebase",
+          "resource": "*",
+          "effect": "deny"
+        }
+      ]
+    }
+  },
+  "permissions": [
+    {
+      "action": "edit",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "webfetch",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "*",
+      "effect": "allow"
+    },
+    {
+      "action": "shell",
+      "resource": "git push*",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "git reset --hard*",
+      "effect": "ask"
+    },
+    {
+      "action": "shell",
+      "resource": "rm -rf*",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "dropdb*",
+      "effect": "deny"
+    }
+  ],
+  "skills": [
+    "./skills"
+  ]
+}
