@@ -50,19 +50,29 @@ $body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index_c
 $idx = Invoke-RestMethod -Method Post -Uri "$BridgeUrl/mcp" -Headers @{Authorization="Bearer $BridgeToken"} -ContentType "application/json" -Body $body
 $idx.result.content[0].text | Write-Host
 
-# Poll index_status briefly if still running
-for ($i=0; $i -lt 6; $i++) {
+# Poll index_status until done (full reindex ~60s). Break only on status: done
+# (previous regex also matched index_version: null while still running).
+for ($i=0; $i -lt 30; $i++) {
   Start-Sleep -Seconds 2
   $stBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index_status","arguments":{"projectId":"' + $ProjectId + '"}}}'
   $st = Invoke-RestMethod -Method Post -Uri "$BridgeUrl/mcp" -Headers @{Authorization="Bearer $BridgeToken"} -ContentType "application/json" -Body $stBody
   $txt = $st.result.content[0].text
   Write-Host "[reindex] status: $txt"
-  if ($txt -match 'status:\s*done|status:\s*removed|index_version') { break }
+  if ($txt -match 'status:\s*done') { break }
+  if ($txt -match 'status:\s*error') { throw "index failed: $txt" }
 }
 
 Write-Host "[reindex] verifying code_context query=`"$Query`"..."
 $verifyBody = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"code_context","arguments":{"projectId":"' + $ProjectId + '","query":"' + $Query + '","top_k":3}}}'
-$verify = Invoke-RestMethod -Method Post -Uri "$BridgeUrl/mcp" -Headers @{Authorization="Bearer $BridgeToken"} -ContentType "application/json" -Body $verifyBody
+$verify = $null
+for ($r=0; $r -lt 3; $r++) {
+  try {
+    $verify = Invoke-RestMethod -Method Post -Uri "$BridgeUrl/mcp" -Headers @{Authorization="Bearer $BridgeToken"} -ContentType "application/json" -Body $verifyBody
+    break
+  } catch {
+    if ($_.Exception.Message -match '25000ms|deadline|timeout' -and $r -lt 2) { Start-Sleep -Seconds 3; continue } else { throw }
+  }
+}
 $verify.result.content[0].text | Write-Host
 
 Write-Host "[reindex] done — code_context({projectId:`"$ProjectId`"}) should now return source."
