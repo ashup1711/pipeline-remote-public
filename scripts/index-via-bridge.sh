@@ -102,51 +102,58 @@ fi
 # ── 1. mirror (HOST only) ────────────────────────────────────────────────
 if [ "$IS_REMOTE" -eq 1 ]; then
   echo "[index-via-bridge] remote mode — skipping mirror creation, will POST index_codebase to $BRIDGE"
-elif [ -z "$MIRROR_PATH" ] && [ -n "$URL" ]; then
-  # default sibling of pipeline-global (~/www/<projectId>), indexer-readable parent
-  MIRROR_PATH="$(cd "$PIPELINE_ROOT/.." && pwd)/$PROJECT_ID"
-fi
-if [ -n "$URL" ] && [ -n "$BRANCH" ]; then
+elif [ -n "$URL" ] && [ -n "$BRANCH" ]; then
+  # URL+branch supplied: clone/refresh mirror (path defaults to sibling ~/www/<id>)
+  if [ -z "$MIRROR_PATH" ]; then
+    MIRROR_PATH="$(cd "$PIPELINE_ROOT/.." && pwd)/$PROJECT_ID"
+  fi
   SYNC_URL="$URL"
-  # Private repos: inject token from env so the host can clone. Never log it.
   if [[ "$SYNC_URL" == https://github.com/* ]] && [ -n "${GITHUB_TOKEN:-}" ] && [[ "$SYNC_URL" != *"@"* ]]; then
     SYNC_URL="${SYNC_URL/https:\/\/github.com\//https:\/\/oauth2:${GITHUB_TOKEN}@github.com/}"
   fi
-  if [ -n "$MIRROR_PATH" ]; then
-    if ! bash "$SCRIPT_DIR/sync-remote-mirror.sh" --project "$PROJECT_ID" --url "$SYNC_URL" --branch "$BRANCH" --path "$MIRROR_PATH" --register 2>&1; then
-      EC=$?
-      echo "[index-via-bridge] mirror create failed (exit $EC)." >&2
-      echo "  Private repo? Provide a host-readable URL:" >&2
-      echo "    GITHUB_TOKEN=<pat> bash scripts/index-via-bridge.sh --project $PROJECT_ID --url https://github.com/KONEKTT/konektt-admin.git --branch development" >&2
-      echo "  or use SSH if the host has a deploy key:" >&2
-      echo "    bash scripts/index-via-bridge.sh --project $PROJECT_ID --url git@github.com:KONEKTT/konektt-admin.git --branch development" >&2
-      exit $EC
-    fi
-  else
-    if ! bash "$SCRIPT_DIR/sync-remote-mirror.sh" --project "$PROJECT_ID" --url "$SYNC_URL" --branch "$BRANCH" --register 2>&1; then
-      EC=$?
-      echo "[index-via-bridge] mirror create failed (exit $EC) — see hints above" >&2
-      exit $EC
-    fi
+  if ! bash "$SCRIPT_DIR/sync-remote-mirror.sh" --project "$PROJECT_ID" --url "$SYNC_URL" --branch "$BRANCH" --path "$MIRROR_PATH" --register 2>&1; then
+    EC=$?
+    echo "[index-via-bridge] mirror create failed (exit $EC)." >&2
+    echo "  Private repo? Provide a host-readable URL:" >&2
+    echo "    GITHUB_TOKEN=<pat> bash scripts/index-via-bridge.sh --project $PROJECT_ID --url https://github.com/KONEKTT/konektt-admin.git --branch development" >&2
+    echo "  or use SSH if the host has a deploy key:" >&2
+    echo "    bash scripts/index-via-bridge.sh --project $PROJECT_ID --url git@github.com:KONEKTT/konektt-admin.git --branch development" >&2
+    exit $EC
   fi
 elif [ -n "$URL" ] || [ -n "$BRANCH" ]; then
   echo "FATAL: --url and --branch must be given together" >&2; exit 2
+elif [ -n "$MIRROR_PATH" ]; then
+  # Existing checkout outside pipeline-global (no URL needed) — point hostPath there.
+  if [ ! -d "$MIRROR_PATH/.git" ]; then
+    echo "FATAL: --path $MIRROR_PATH does not exist or is not a git repo" >&2
+    echo "  Clone it first, or pass --url/--branch to create a mirror." >&2
+    exit 2
+  fi
+  echo "[index-via-bridge] using existing checkout at $MIRROR_PATH"
+  python3 - "$PIPELINE_ROOT/config/projects.json" "$PROJECT_ID" "$MIRROR_PATH" <<'PY'
+import json, sys, os
+reg, pid, host_path = sys.argv[1:4]
+with open(reg) as fh:
+    raw=json.load(fh)
+entry=raw.setdefault("projects", {}).setdefault(pid, {})
+entry["hostPath"]=host_path
+entry.setdefault("pgSchema", f"p_{pid.replace('-','_')}")
+# keep existing sync block if any; do not overwrite url/branch when only --path was given
+tmp=reg+".tmp"
+with open(tmp,"w") as fh: json.dump(raw,fh,indent=2); fh.write("\n")
+os.replace(tmp, reg)
+print(f"[index-via-bridge] registered hostPath for '{pid}' -> {host_path}")
+PY
 else
-  # just refresh if sync block exists; otherwise no-op
+  # no URL, no explicit path — just refresh if sync block exists; otherwise plain checkout
   if bash "$SCRIPT_DIR/sync-remote-mirror.sh" --project "$PROJECT_ID" 2>&1 | tee /tmp/index-via-bridge-sync.log; then
     cat /tmp/index-via-bridge-sync.log | head -20
   else
-    # just refresh if sync block exists; otherwise no-op
-    if bash "$SCRIPT_DIR/sync-remote-mirror.sh" --project "$PROJECT_ID" 2>&1 | tee /tmp/index-via-bridge-sync.log; then
-      cat /tmp/index-via-bridge-sync.log | head -20
+    if grep -q "no git url/branch" /tmp/index-via-bridge-sync.log 2>/dev/null; then
+      echo "[index-via-bridge] no sync block for '$PROJECT_ID' — indexing local checkout directly"
     else
-      # no sync block — this is a plain local checkout, skip mirror step
-      if grep -q "no git url/branch" /tmp/index-via-bridge-sync.log 2>/dev/null; then
-        echo "[index-via-bridge] no sync block for '$PROJECT_ID' — indexing local checkout directly"
-      else
-        cat /tmp/index-via-bridge-sync.log
-        exit 1
-      fi
+      cat /tmp/index-via-bridge-sync.log
+      exit 1
     fi
   fi
 fi
