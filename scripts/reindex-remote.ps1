@@ -58,8 +58,9 @@ for ($i=0; $i -lt 30; $i++) {
   $st = Invoke-RestMethod -Method Post -Uri "$BridgeUrl/mcp" -Headers @{Authorization="Bearer $BridgeToken"} -ContentType "application/json" -Body $stBody
   $txt = $st.result.content[0].text
   Write-Host "[reindex] status: $txt"
-  if ($txt -match 'status:\s*done') { break }
-  if ($txt -match 'status:\s*error') { throw "index failed: $txt" }
+  # Tool results are PSV (`status|done`); accept the legacy YAML-ish form too.
+  if ($txt -match 'status[^a-zA-Z]*done') { break }
+  if ($txt -match 'status[^a-zA-Z]*error') { throw "index failed: $txt" }
 }
 
 Write-Host "[reindex] verifying code_context query=`"$Query`"..."

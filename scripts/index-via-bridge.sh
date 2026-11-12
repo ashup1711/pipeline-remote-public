@@ -255,7 +255,18 @@ def mcp_call(name, arguments):
         if t:
             try: return json.loads(t)
             except:
-                # bridge may return YAML-ish text for index results
+                # Tool results are PSV (pipe-separated): `key|value` lines, with
+                # a `# <table>: col|col` header for tabular payloads. Older
+                # bridges emitted YAML-ish `key: value` lines — accept both.
+                if "|" in t:
+                    d = {}
+                    for line in t.splitlines():
+                        line = line.strip()
+                        if not line or line.startswith("#") or "|" not in line:
+                            continue
+                        k, v = line.split("|", 1)
+                        d[k.strip()] = v.strip().strip('"')
+                    if d: return d
                 if "status:" in t:
                     d={}
                     for line in t.splitlines():
