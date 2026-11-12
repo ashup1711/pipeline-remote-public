@@ -5,9 +5,13 @@
 #   bash scripts/index-via-bridge.sh --project <projectId> [--url <git-url> --branch <branch>] [--paths a,b] [--bridge http://127.0.0.1:8003] [--skip-verify]
 #
 # Usage (REMOTE — no host filesystem, only the bridge URL+token):
+#   # Push local checkout at --path (no git URL needed) and index it:
 #   PIPELINE_BRIDGE_URL=https://<ngrok>.ngrok-free.app PIPELINE_BRIDGE_TOKEN=<token> \
-#     bash scripts/index-via-bridge.sh --project <projectId> [--bridge https://<ngrok>.ngrok-free.app] [--paths a,b]
-#   # or on Windows PowerShell: use the Invoke-RestMethod snippet printed by --help
+#     bash scripts/index-via-bridge.sh --project <projectId> --path /local/repo [--bridge https://<ngrok>.ngrok-free.app] [--paths a,b]
+#   # Or just reindex the host mirror without pushing:
+#   PIPELINE_BRIDGE_URL=https://<ngrok>.ngrok-free.app PIPELINE_BRIDGE_TOKEN=<token> \
+#     bash scripts/index-via-bridge.sh --project <projectId> [--bridge https://<ngrok>.ngrok-free.app]
+#   # Windows PowerShell: see --help for tar + Invoke-RestMethod steps
 #
 # Why: a remote agent lives on another machine and has no host filesystem.
 # The host keeps the mirror at hostPath (config/projects.json) and the bridge
@@ -46,12 +50,19 @@ while [ $# -gt 0 ]; do
     --paths=*) PATHS_ARG="${1#--paths=}"; shift ;;
     --skip-verify) SKIP_VERIFY=1; shift ;;
     -h|--help)
-      sed -n '2,60p' "$0"
+      sed -n '2,70p' "$0"
       echo ""
       echo "Env: PIPELINE_BRIDGE_TOKEN (or /tmp/pipeline-bridge-token), PIPELINE_BRIDGE_URL, GITHUB_TOKEN (private repos on host)"
       echo ""
-      echo "Remote (Windows PowerShell) — no bash needed:"
-      echo '  $env:PIPELINE_BRIDGE_URL="https://<ngrok>.ngrok-free.app"; $env:PIPELINE_BRIDGE_TOKEN="<token>"'
+      echo "Remote local path (no git URL):"
+      echo "  bash scripts/index-via-bridge.sh --project admin --path /local/konektt-admin"
+      echo "  # tars --path (excludes .git/node_modules) and POSTs to /upload, then indexes via /mcp"
+      echo ""
+      echo "Remote (Windows PowerShell) — local path without bash:"
+      echo '  Compress-Archive -Path C:\code\admin\* -DestinationPath upload.zip  # then POST as tar.gz preferred'
+      echo '  # Preferred: use Git Bash tar + curl, or:'
+      echo '  tar -czf upload.tgz -C C:\code\admin --exclude=.git --exclude=node_modules .'
+      echo '  curl.exe -X POST "$env:PIPELINE_BRIDGE_URL/upload?projectId=admin" -H "Authorization: Bearer $env:PIPELINE_BRIDGE_TOKEN" -H "content-type: application/gzip" --data-binary "@upload.tgz"'
       echo '  $body='\''{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"index_codebase","arguments":{"projectId":"admin"}}}'\'
       echo '  Invoke-RestMethod -Method Post -Uri "$env:PIPELINE_BRIDGE_URL/mcp" -Headers @{Authorization="Bearer $env:PIPELINE_BRIDGE_TOKEN"} -ContentType "application/json" -Body $body'
       exit 0
@@ -99,9 +110,34 @@ if [ "$IS_REMOTE" -eq 1 ] && [ -n "$URL" ]; then
   URL=""; BRANCH=""
 fi
 
-# ── 1. mirror (HOST only) ────────────────────────────────────────────────
+# ── 1. mirror / upload ───────────────────────────────────────────────────
 if [ "$IS_REMOTE" -eq 1 ]; then
-  echo "[index-via-bridge] remote mode — skipping mirror creation, will POST index_codebase to $BRIDGE"
+  if [ -n "$MIRROR_PATH" ] && [ -d "$MIRROR_PATH" ]; then
+    # Remote local checkout: push files to host via POST /upload (no git URL needed).
+    echo "[index-via-bridge] remote local path: $MIRROR_PATH -> $BRIDGE/upload?projectId=$PROJECT_ID"
+    if [ -z "$TOKEN" ]; then
+      echo "FATAL: PIPELINE_BRIDGE_TOKEN required for upload" >&2; exit 1
+    fi
+    UPLOAD_URL="${BRIDGE%/}/upload?projectId=$(printf '%s' "$PROJECT_ID" | python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.stdin.read()))')"
+    # tar the local checkout (exclude .git, node_modules, dist, etc.) and POST it
+    TMP_TGZ="$(mktemp /tmp/upload-XXXXXX.tgz)"
+    trap 'rm -f "$TMP_TGZ"' EXIT
+    tar -czf "$TMP_TGZ" -C "$MIRROR_PATH" --exclude='.git' --exclude='node_modules' --exclude='dist' --exclude='.pipeline' --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' . 2>&1 | head -20
+    echo "[index-via-bridge] uploading $(du -h "$TMP_TGZ" | cut -f1) ..."
+    HTTP_CODE=$(curl -s -o /tmp/upload-resp.json -w "%{http_code}" -X POST "$UPLOAD_URL" -H "Authorization: Bearer $TOKEN" -H "content-type: application/gzip" --data-binary "@$TMP_TGZ" --max-time 120)
+    cat /tmp/upload-resp.json | head -20
+    echo "[index-via-bridge] upload HTTP $HTTP_CODE"
+    if [ "$HTTP_CODE" != "200" ]; then
+      echo "FATAL: upload failed" >&2; cat /tmp/upload-resp.json >&2; exit 1
+    fi
+    rm -f "$TMP_TGZ"; trap - EXIT
+    echo "[index-via-bridge] upload ok — will now index"
+  else
+    if [ -n "$MIRROR_PATH" ]; then
+      echo "[index-via-bridge] WARN: --path $MIRROR_PATH not found locally, skipping upload (host already has mirror)" >&2
+    fi
+    echo "[index-via-bridge] remote mode — no local path, will POST index_codebase to $BRIDGE"
+  fi
 elif [ -n "$URL" ] && [ -n "$BRANCH" ]; then
   # URL+branch supplied: clone/refresh mirror (path defaults to sibling ~/www/<id>)
   if [ -z "$MIRROR_PATH" ]; then
